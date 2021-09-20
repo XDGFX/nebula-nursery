@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # nebula-nursery.py
 #
 # A script designed to improve the setup and expansion of Nebula networks. Using
@@ -26,18 +28,47 @@
 #
 # ---
 
+import logging
 import os
 import re
+import shutil
 import subprocess
+import uuid
+from zipfile import ZipFile
 
+from flask import Flask, send_file, request, abort
 from jinja2 import Template
 from PyInquirer import prompt
+from pyngrok import ngrok
+from uuid import uuid4
 
 __version__ = "0.1"
+
+app = Flask(__name__)
+os.environ["WERKZEUG_RUN_MAIN"] = "true"
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
+
+download_uuid = uuid4()
+
+
+@app.route("/")
+def download_file():
+    """
+    Serve the output file to the user.
+    """
+    code = request.args.get("x")
+
+    if code == str(download_uuid):
+        return send_file("output.zip", as_attachment=True)
+    else:
+        abort(401)
 
 
 class Nebula:
     def __init__(self) -> None:
+        cleanup()
+        os.makedirs("output")
+
         self.script_dir = os.path.dirname(os.path.realpath(__file__))
         self.executable = self.get_nebula_cert_executable()
         self.lighthouses = []
@@ -135,7 +166,7 @@ class Nebula:
 
         subprocess.run(
             [
-                self.nebula_cert,
+                self.executable,
                 "ca",
                 "-name",
                 ca_name,
@@ -149,7 +180,9 @@ class Nebula:
             check=True,
         )
 
-        print("Successfully created CA. The output files are available in /output")
+        with ZipFile("output.zip", "w") as zip:
+            zip.write(os.path.join("output", "ca.crt"))
+            zip.write(os.path.join("output", "ca.key"))
 
     def sign_node(self):
         """
@@ -342,6 +375,32 @@ class Nebula:
         # )
 
 
+def cleanup() -> None:
+    """
+    Remove any files or folders which might exist after execution.
+    """
+    if os.path.exists("output"):
+        shutil.rmtree("output")
+
+    if os.path.exists("output.zip"):
+        os.remove("output.zip")
+
+
+def get_all_file_paths(directory: str) -> list:
+    """
+    Get a list of filepaths for all files in a directory.
+    """
+
+    file_paths = []
+
+    for root, dirs, files in os.walk(directory):
+        for filename in files:
+            filepath = os.path.join(root, filename)
+            file_paths.append(filepath)
+
+    return file_paths
+
+
 def main():
     """
     Determine if user wants to create a new ca, or to sign a new node.
@@ -365,7 +424,6 @@ def main():
     print(splash + "\n")
 
     nb = Nebula()
-    os.makedirs("output", exist_ok=True)
 
     mode = prompt(
         {
@@ -381,6 +439,23 @@ def main():
     elif mode == "sign":
         nb.sign_node()
 
+    # Open an ngrok tunnel to the webserver
+    print("\nGenerating a webserver tunnel...")
+    http_tunnel = ngrok.connect("8080")
+
+    # Run webserver to allow download of output.zip
+    print(
+        f"\nFiles successfully generated! They are available at: {http_tunnel.public_url}?x={download_uuid}"
+    )
+    print("Press Ctrl-C when the files are downloaded to terminate Nebula Nursery.")
+    app.run(port=8080)
+
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nExiting...")
+        exit(0)
+    finally:
+        cleanup()
