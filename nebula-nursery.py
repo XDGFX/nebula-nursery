@@ -33,14 +33,15 @@ import os
 import re
 import shutil
 import subprocess
-import uuid
+from glob import glob
+from uuid import uuid4
 from zipfile import ZipFile
 
-from flask import Flask, send_file, request, abort
+from cryptography.fernet import Fernet
+from flask import Flask, abort, request, send_file
 from jinja2 import Template
 from PyInquirer import prompt
 from pyngrok import ngrok
-from uuid import uuid4
 
 __version__ = "0.1"
 
@@ -54,12 +55,12 @@ download_uuid = uuid4()
 @app.route("/")
 def download_file():
     """
-    Serve the output file to the user.
+    Serve the output node.zip file to the user.
     """
     code = request.args.get("x")
 
     if code == str(download_uuid):
-        return send_file("output.zip", as_attachment=True)
+        return send_file("node.zip", as_attachment=True)
     else:
         abort(401)
 
@@ -67,7 +68,6 @@ def download_file():
 class Nebula:
     def __init__(self) -> None:
         cleanup()
-        os.makedirs("output")
 
         self.script_dir = os.path.dirname(os.path.realpath(__file__))
         self.executable = self.get_nebula_cert_executable()
@@ -164,6 +164,7 @@ class Nebula:
         ).get("confirm"):
             raise SystemExit("Please re-run the script and enter new values.")
 
+        # Generate the files
         subprocess.run(
             [
                 self.executable,
@@ -173,21 +174,85 @@ class Nebula:
                 "-duration",
                 ca_duration,
                 "-out-crt",
-                os.path.join(self.script_dir, "output", "ca.crt"),
+                os.path.join(self.script_dir, "ca.crt"),
                 "-out-key",
-                os.path.join(self.script_dir, "output", "ca.key"),
+                os.path.join(self.script_dir, "ca.key"),
             ],
             check=True,
         )
 
-        with ZipFile("output.zip", "w") as zip:
-            zip.write(os.path.join("output", "ca.crt"))
-            zip.write(os.path.join("output", "ca.key"))
+        # Compress into a single zip
+        with ZipFile("ca.zip", "w") as zip:
+            zip.write("ca.crt")
+            zip.write("ca.key")
+
+        # Generate a key for encryption
+        key = Fernet.generate_key()
+
+        print(
+            "The ca encryption key has been generated. Make sure you save this in a safe place!"
+        )
+        print(f"\n{key.decode()}\n")
+
+        key_validate = (
+            prompt(
+                {
+                    "type": "password",
+                    "name": "key_validate",
+                    "message": "Please paste the key here to ensure it's copied correctly.",
+                    "validate": lambda x: x != "",
+                }
+            )
+            .get("key_validate")
+            .encode()
+        )
+
+        if key_validate != key:
+            raise Exception("The key you entered does not match the key generated.")
+        else:
+            print("Key validated successfully")
+
+        # Encrypt the zip file
+        with open("ca.zip", "rb") as f:
+            zip_data = f.read()
+
+        encrypted_zip = Fernet(key).encrypt(zip_data)
+
+        with open("ca.crypt", "wb") as f:
+            f.write(encrypted_zip)
+
+        print("Successfully created a ca and stored it securely for future use!")
+        print("Re-run this script to generate node keys!")
 
     def sign_node(self):
         """
         Prompt the user for the node name and ip, and optionally any groups, then sign the node using nebula-cert
         """
+
+        key = (
+            prompt(
+                {
+                    "type": "password",
+                    "name": "key_validate",
+                    "message": "Please enter the ca encryption key.",
+                    "validate": lambda x: x != "",
+                }
+            )
+            .get("key_validate")
+            .encode()
+        )
+
+        # Extract the encrypted ca files
+        with open("ca.crypt", "rb") as f:
+            encrypted_zip = f.read()
+
+        zip_data = Fernet(key).decrypt(encrypted_zip)
+
+        with open("ca.zip", "wb") as f:
+            f.write(zip_data)
+
+        with ZipFile("ca.zip", "r") as zip:
+            zip.extractall()
 
         # Ask the user to specify if a lighthouse node is to be created
         is_lighthouse = prompt(
@@ -354,51 +419,51 @@ class Nebula:
         ).get("confirm"):
             raise SystemExit("Please re-run the script and enter new values.")
 
-        # command = [
-        #     self.nebula_cert,
-        #     "sign",
-        #     "-name",
-        #     node_name,
-        #     "-ip",
-        #     node_ip,
-        #     "-out-crt",
-        #     os.path.join(self.script_dir, "output", "node.crt"),
-        #     "-o key",
-        #     os.path.join(self.script_dir, "output", "node.key"),
-        # ]
+        command = [
+            self.executable,
+            "sign",
+            "-name",
+            node_name,
+            "-ip",
+            node_ip,
+            "-out-crt",
+            f"{node_name}.crt",
+            "-out-key",
+            f"{node_name}.key",
+        ]
 
-        # if node_groups:
-        #     command.extend(["-groups", node_groups])
+        if node_groups:
+            command.extend(["-groups", '"' + node_groups + '"'])
 
-        # subprocess.run(
-        #     check=True,
-        # )
+        subprocess.run(
+            command,
+            check=True,
+        )
+
+        with ZipFile("node.zip", "w") as zip:
+            zip.write(f"{node_name}.crt")
+            zip.write(f"{node_name}.key")
+            zip.write("ca.crt")
+
+        # Open an ngrok tunnel to the webserver
+        print("\nGenerating a webserver tunnel...")
+        http_tunnel = ngrok.connect("8080")
+
+        # Run webserver to allow download of output.zip
+        print(
+            f"\nFiles successfully generated! They are available at: {http_tunnel.public_url}?x={download_uuid}"
+        )
+        print("Press Ctrl-C when the files are downloaded to terminate Nebula Nursery.")
+        app.run(port=8080)
 
 
 def cleanup() -> None:
     """
     Remove any files or folders which might exist after execution.
     """
-    if os.path.exists("output"):
-        shutil.rmtree("output")
 
-    if os.path.exists("output.zip"):
-        os.remove("output.zip")
-
-
-def get_all_file_paths(directory: str) -> list:
-    """
-    Get a list of filepaths for all files in a directory.
-    """
-
-    file_paths = []
-
-    for root, dirs, files in os.walk(directory):
-        for filename in files:
-            filepath = os.path.join(root, filename)
-            file_paths.append(filepath)
-
-    return file_paths
+    for file in list(glob("*.crt") + glob("*.key") + glob("*.zip")):
+        os.remove(file)
 
 
 def main():
@@ -425,30 +490,29 @@ def main():
 
     nb = Nebula()
 
-    mode = prompt(
-        {
-            "type": "list",
-            "name": "mode",
-            "message": "Do you want to create a new ca [ca] or sign a new node [sign]?",
-            "choices": ["ca", "sign"],
-        }
-    ).get("mode")
+    if os.path.exists("ca.crypt"):
+        mode = "sign"
+
+        print("\nA certificate authority has already been generated!")
+
+        if not prompt(
+            {
+                "type": "confirm",
+                "name": "confirm",
+                "message": "Would you like to sign a new node?",
+            }
+        ).get("confirm"):
+            raise SystemExit(
+                "Please remove ca.crypt before signing a new certificate authority."
+            )
+
+    else:
+        mode = "ca"
 
     if mode == "ca":
         nb.create_ca()
     elif mode == "sign":
         nb.sign_node()
-
-    # Open an ngrok tunnel to the webserver
-    print("\nGenerating a webserver tunnel...")
-    http_tunnel = ngrok.connect("8080")
-
-    # Run webserver to allow download of output.zip
-    print(
-        f"\nFiles successfully generated! They are available at: {http_tunnel.public_url}?x={download_uuid}"
-    )
-    print("Press Ctrl-C when the files are downloaded to terminate Nebula Nursery.")
-    app.run(port=8080)
 
 
 if __name__ == "__main__":
