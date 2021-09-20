@@ -292,6 +292,7 @@ class Nebula:
         ).get("node_groups")
 
         # If the node is a lighthouse, prompt for public ip and port
+        lighthouse_port = None
         if is_lighthouse:
             lighthouse_public_ip = prompt(
                 {
@@ -440,9 +441,22 @@ class Nebula:
             check=True,
         )
 
+        config_file = Template(open("template-config.yml.jinja").read())
+
+        with open("config.yml", "w") as f:
+            f.write(
+                config_file.render(
+                    node_name=node_name,
+                    lighthouses=self.lighthouses,
+                    is_lighthouse=is_lighthouse,
+                    lighthouse_port=lighthouse_port,
+                )
+            )
+
         with ZipFile("node.zip", "w") as zip:
             zip.write(f"{node_name}.crt")
             zip.write(f"{node_name}.key")
+            zip.write("config.yml")
             zip.write("ca.crt")
 
         # Open an ngrok tunnel to the webserver
@@ -462,7 +476,7 @@ def cleanup() -> None:
     Remove any files or folders which might exist after execution.
     """
 
-    for file in list(glob("*.crt") + glob("*.key") + glob("*.zip")):
+    for file in list(glob("*.crt") + glob("*.key") + glob("*.zip") + glob("*.yml")):
         os.remove(file)
 
 

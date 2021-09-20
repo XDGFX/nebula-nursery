@@ -7,8 +7,8 @@
 pki:
   # The CAs that are accepted by this node. Must contain one or more certificates created by 'nebula-cert ca'
   ca: /etc/nebula/ca.crt
-  cert: /etc/nebula/{{ host }}.crt
-  key: /etc/nebula/{{ host }}.key
+  cert: /etc/nebula/{{ node_name }}.crt
+  key: /etc/nebula/{{ node_name }}.key
   #blocklist is a list of certificate fingerprints that we will refuse to talk to
   #blocklist:
   #  - c99d4e650533b92061b09918e838a5a0a6aaee21eed1d12fd937682865936c72
@@ -20,7 +20,7 @@ pki:
 # Example, if your lighthouse has the nebula IP of 192.168.100.1 and has the real ip address of 100.64.22.11 and runs on port 4242:
 static_host_map:
   {% for lighthouse in lighthouses %}
-  "{{ lighthouse['nebula'] }}": ["{{ lighthouse['public'] }}:{{ lighthouse['port'] }}"]
+  "{{ lighthouse['nebula'].split('/')[0] }}": ["{{ lighthouse['public'] }}:{{ lighthouse['port'] }}"]
   {% endfor %}
 
 lighthouse:
@@ -258,9 +258,9 @@ firewall:
       proto: icmp
       host: any
 
-    # Allow tcp/443 from any host with BOTH laptop and home group
-    - port: 443
-      proto: tcp
-      groups:
-        - laptop
-        - home
+    # # Allow tcp/443 from any host with BOTH laptop and home group
+    # - port: 443
+    #   proto: tcp
+    #   groups:
+    #     - laptop
+    #     - home
