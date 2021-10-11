@@ -43,7 +43,7 @@ from jinja2 import Template
 from PyInquirer import prompt
 from pyngrok import ngrok
 
-__version__ = "0.1"
+__version__ = "0.2"
 
 app = Flask(__name__)
 os.environ["WERKZEUG_RUN_MAIN"] = "true"
@@ -434,7 +434,7 @@ class Nebula:
         ]
 
         if node_groups:
-            command.extend(["-groups", '"' + node_groups + '"'])
+            command.extend(["-groups", node_groups])
 
         subprocess.run(
             command,
